@@ -1,0 +1,28 @@
+Read_Me for art gallery project
+
+This implementation allows for two guards to be placed in a simple polygon drawn by the user.  The guards can be moved with the 
+wsad and ikjl keys.  
+
+Keys:
+z - initialize drawing the polygon
+c - start computing the visible polygon from the placed guards
+g - place guard 1
+	w - move guard 1 + y
+	s - move guard 1 - y
+	d - move guard 1 + x
+	a - move guard 1 -x
+h - place guard 2
+	i - move guard 2 + y
+	k - move guard 2 - y
+	l - move guard 2 + x
+	j - move guard 2 - x
+
+e - increase speed
+r - decrease speed 
+
+
+Known Issues:
+There are some degenerate cases taht cause problems for a few of the functions.  
+	isInside sometimes determines that the guard is outside the polygon 
+	In some cases, the projected points do not work properly.
+

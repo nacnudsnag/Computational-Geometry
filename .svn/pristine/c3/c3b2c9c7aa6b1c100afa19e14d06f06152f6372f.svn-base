@@ -1,0 +1,903 @@
+/*  Main file for the A* and rrt implementaion.  This implementation supports A* and 
+ *  rrt motion planning functions in 2D space with rotation.  
+ *
+ *  rrt is not optimized to continue finding better paths after the first is found.
+ *  Refer to the READ_ME for a reference for the keys to use with the glut visualization.
+ *
+ *  Authors:            Email:
+ *  Dustin Hines        dhines@bowdoin.edu
+ *  Duncan Gans         dgans@bowdoin.edu
+ */
+#include "geom.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <limits>
+#include <cstdint>
+#include <math.h>
+#include <assert.h>
+#include <iostream>
+#include <algorithm>
+#include <map>
+#include <queue>
+#ifdef __APPLE__
+#include <GLUT/glut.h>
+#else
+#include <GL/glut.h>
+#endif
+#include <vector>
+
+using namespace std;
+
+//colors for glut
+GLfloat red[3] = {1.0, 0.0, 0.0};
+GLfloat green[3] = {0.0, 1.0, 0.0};
+GLfloat blue[3] = {0.0, 0.0, 1.0};
+GLfloat black[3] = {0.0, 0.0, 0.0};
+GLfloat white[3] = {1.0, 1.0, 1.0};
+GLfloat gray[3] = {0.5, 0.5, 0.5};
+GLfloat yellow[3] = {1.0, 1.0, 0.0};
+GLfloat magenta[3] = {1.0, 0.0, 1.0};
+GLfloat cyan[3] = {0.0, 1.0, 1.0};
+
+GLint fillmode = 0;
+
+int drawAstar = 0; //global used to draw the A* path after it is computed
+int rrtDraw; //global for drawing rrt path
+int currPoly = 0;
+int n; //the current polygon
+vector <vector <point2D> > polygons;
+vector <vector <lineSegment2D> > polysegs;
+vector <point2D> polygon;
+
+int DELTATHETA = 20; //global used to decide how percise theta adjustments should be 
+		     //in the A* implemenation--dramatically optimaizes space 
+int freeSpaceValue;  //keep track of amount of free space so that we can adjust DELTATHETA!
+double percentFree; 
+
+double bestDist = INT_MAX;
+vector <robot> path;
+vector <robot> heap;
+robot endRobot;
+robot tempEndRobot;
+robot randRobo;
+int rrtDone = 0;
+int fits = 1;
+int firstRound = 1;
+int completed = 0;
+vector <point2D> points;
+
+vector<vector<vector<robot> > > robots;
+vector <robot> rrtrobots;
+
+robot pathRobot;
+int currRobot = 0;
+vector<vector<vector<int> > > freeSpace;
+int drawPath = 0;
+
+robot robit;
+//end point
+point2D finish = {-10, -10};
+//coordinates of last mouse click
+//initialized to a point outside the window
+
+
+//function declarations
+void display(void);
+void keypress(unsigned char key, int x, int y);
+point2D pIntersect(point2D a, point2D b, point2D c, point2D d);
+void mousepress(int button, int state, int x, int y);
+vector <vector <lineSegment2D> > pointsToSeg(vector <vector<point2D> > polygons);
+
+
+//point2D pIntersect(point2D a, point2D b, point2D c, point2D d);
+
+const int WINDOWSIZE = 500; 
+double mouse_x=-10, mouse_y=-10; 
+double poly_init_mode = 0; 
+
+
+
+void draw_circle(double x, double y){
+  glColor3fv(blue);   
+  int precision = 100;
+  double r = 4; 
+  double theta = 0;
+  glBegin(GL_POLYGON);
+  for(int i = 0; i < precision; i++){
+    theta = i * 2 * M_PI/precision;
+    glVertex2f(x + r*cos(theta), y + r*sin(theta));
+  }
+  glEnd();
+}
+
+
+void draw_robot(){
+  glColor3fv(green);
+  glBegin(GL_POLYGON);
+  glVertex2f(robit.a.x , robit.a.y);
+  glVertex2f(robit.b.x , robit.b.y);
+  glVertex2f(robit.c.x , robit.c.y);
+  glVertex2f(robit.d.x , robit.d.y);
+  glEnd();
+}
+
+
+void draw_end(double x, double y){
+  glColor3fv(red);
+  int precision = 100;
+  double r = 4;
+  double theta = 0;
+  glBegin(GL_POLYGON);
+  for(int i = 0; i < precision; i++){
+    theta = i * 2 * M_PI/precision;
+    glVertex2f(x + r*cos(theta), y + r*sin(theta));
+  }
+  glEnd();
+}
+
+//function to convert a polygon of points to a polygon of line segments
+
+vector < vector <lineSegment2D> > pointsToSeg(vector < vector < point2D > > polygons)
+{
+        vector < vector < lineSegment2D > > toReturn;
+        for (int i = 0; i < polygons.size(); ++i)
+        {
+                vector < lineSegment2D > polySeg;
+                lineSegment2D toAdd;
+                toAdd.p1 = polygons[i][polygons[i].size()-1];
+                toAdd.p2 = polygons[i][0];
+                polySeg.push_back(toAdd);
+                for( int h = 1; h < polygons[i].size(); ++h)
+                {
+                        toAdd.p1 = polygons[i][h - 1];
+                        toAdd.p2 = polygons[i][h];
+                        polySeg.push_back(toAdd);
+                }
+                toReturn.push_back(polySeg);
+        }
+        return toReturn;
+}
+
+
+void mousepress(int button, int state, int x, int y) {
+
+  if(state == GLUT_DOWN) {
+
+    mouse_x = x;
+    mouse_y = y;
+    //(x,y) are in wndow coordinates, where the origin is in the upper
+    //left corner; our reference system has the origin in lower left
+    //corner, this means we have to reflect y
+    mouse_y = WINDOWSIZE - mouse_y; 
+    
+    printf("mouse click at (x=%d, y=%d)\n", (int)mouse_x, (int)mouse_y);
+    if (poly_init_mode == 1) {
+      cout << "In Poly init mode" << endl;
+      point2D p = {mouse_x, mouse_y}; 
+      polygons[currPoly].push_back(p);
+    }
+    if (poly_init_mode == 2) 
+    {
+	robit.a.x = mouse_x;
+	robit.a.y = mouse_y; 
+	poly_init_mode = 2.5;
+	robit.b.x = mouse_x;
+        robit.b.y = mouse_y;
+	robit.c.x = mouse_x;
+        robit.c.y = mouse_y;
+	robit.d.x = mouse_x;
+        robit.d.y = mouse_y;
+    }
+    else if (poly_init_mode == 2.5) 
+    {
+	
+	robit.c.x = mouse_x;
+	robit.c.y = mouse_y; 
+	robit.b.x = robit.c.x;
+	robit.b.y = robit.a.y;
+	robit.d.x = robit.a.x;
+	robit.d.y = robit.c.y;
+	robit.theta = 0;
+	robit.distX = robit.c.x - robit.a.x;
+	robit.distY = robit.c.y - robit.a.y;
+	poly_init_mode = 3;
+	
+    }
+    else if (poly_init_mode == 3)
+    {
+	finish.x = mouse_x;
+	finish.y = mouse_y;
+	poly_init_mode = 0;
+    }  
+    glutPostRedisplay();
+  }
+
+}
+
+
+int main(int argc, char** argv){
+  /* initialize GLUT  */
+  glutInit(&argc, argv);
+  glutInitDisplayMode(GLUT_SINGLE | GLUT_RGB);
+  glutInitWindowSize(WINDOWSIZE, WINDOWSIZE);
+  glutInitWindowPosition(100,100);
+  glutCreateWindow(argv[0]);
+  /* register callback functions */
+  glutDisplayFunc(display); 
+
+  glutMouseFunc(mousepress); 
+  glutKeyboardFunc(keypress);
+  /* init GL */
+  /* set background color black*/
+  glClearColor(0, 0, 0, 0);   
+  /* here we can enable depth testing and double buffering and so
+     on */
+
+  
+  /* give control to event handler */
+  glutMainLoop();
+  return 0;
+
+}
+void drawFreeSpace()
+{
+	for (int i = 0; i <= 500; i+=5)
+        {
+                for (int j = 0; j <= 500; j+=5)
+                {
+                        for (int angle = 0; angle < 360; angle+= 10)
+                        {
+				if (freeSpace[i][j][angle/10] == 1)
+				{
+					glColor3fv(cyan);
+					glLineWidth(2);
+
+					glBegin(GL_POLYGON);
+					glVertex2f(i-1, j - 1);
+					glVertex2f(i + 1, j - 1);
+					glVertex2f(i + 1, j + 1);
+					glVertex2f(i -1, j + 1);
+					glEnd();
+					
+				}
+			}
+		}
+	}
+}
+
+void draw_path()
+{
+	cout << endl << path.size() << endl;
+	for (int i = path.size() - 1; i > 0; i--)
+	{
+		glColor3fv(cyan);
+		glBegin(GL_LINES);	
+		glVertex2f(path[i].a.x, path[i].a.y);
+		glVertex2f(path[i - 1].a.x, path[i - 1].a.y);
+		glEnd();
+	}
+}
+void draw_segments(vector <lineSegment2D> segs)
+{
+	glColor3fv(red);
+	glLineWidth(2.5);
+	for (int i = 0;i < segs.size(); i++)
+	{
+		glBegin(GL_LINES);
+		glVertex2f(segs[i].p1.x, segs[i].p1.y);
+		glVertex2f(segs[i].p2.x, segs[i].p2.y);
+		glEnd();
+	}
+}
+void drawPathRobot()
+{
+  glColor3fv(magenta);
+  glBegin(GL_POLYGON);
+  glVertex2f(path[currRobot].a.x , path[currRobot].a.y);
+  glVertex2f(path[currRobot].b.x , path[currRobot].b.y);
+  glVertex2f(path[currRobot].c.x , path[currRobot].c.y);
+  glVertex2f(path[currRobot].d.x , path[currRobot].d.y);
+  glEnd();  
+}
+void draw_polygon(vector<point2D> poly){
+  
+  if (poly.size() == 0) return; 
+
+  //set color 
+  glColor3fv(yellow);   
+  glLineWidth(2);
+  int i;
+  for (i=0; i<poly.size()-1; i++) {
+    glBegin(GL_LINES);
+    
+    glVertex2f(poly[i].x, poly[i].y); 
+    glVertex2f(poly[i+1].x, poly[i+1].y);
+    glEnd();
+  }
+  //render last segment between last point and forst point 
+  int last=poly.size()-1; 
+    glBegin(GL_LINES);
+    glVertex2f(poly[last].x, poly[last].y); 
+    glVertex2f(poly[0].x, poly[0].y);
+    glEnd();
+}
+
+
+
+void drawRRRT()
+{
+	for(int i = 0; i < rrtrobots.size(); ++i) 
+	{
+		glColor3fv(red);
+		glLineWidth(1);
+		glBegin(GL_LINES);
+		glVertex2f(rrtrobots[i].a.x, rrtrobots[i].a.y);
+		glVertex2f(rrtrobots[rrtrobots[i].prevIndex].a.x, rrtrobots[rrtrobots[i].prevIndex].a.y);
+		glEnd();
+	}
+
+}
+
+
+//function that adds a border so that the robot doesn't try to sneak outside the window
+void addBorder() {
+    polygon.clear();
+    point2D a, b, c, d;
+    a.x = 10;
+    a.y = 10;
+    polygon.push_back(a);
+    b.x = 490;
+    b.y = 10;
+    polygon.push_back(b);
+    c.x = 490;
+    c.y = 490;
+    polygon.push_back(c);
+    d.x = 10;
+    d.y = 490;
+    polygon.push_back(d);
+    polygons.push_back(polygon);
+} 
+
+//function that moves the robot and end point to the grid used to delineate the space
+void moveToGrid()
+{
+	while (fmod(robit.a.x,5) != 0)
+	{
+		robit.a.x += 1;
+	}
+	while (fmod(robit.a.y,5) != 0)
+        {
+                robit.a.y += 1;
+        }
+	updatePoints(&robit);
+	while (fmod(finish.x,5) != 0)
+        {
+                finish.x += 1;
+        }
+        while (fmod(finish.y,5) != 0)
+        {
+                finish.y += 1;
+        }
+
+}
+
+//function that checks if a robot interests a line segment
+int robotAndLine(lineSegment2D line, robot robit)
+{
+        if (pIntersect(line.p1, line.p2, robit.a, robit.b).x != -1)
+        {
+                return 1;
+        }
+        if (pIntersect(line.p1, line.p2, robit.b, robit.c).x != -1)
+        {
+                return 1;
+        }
+        if (pIntersect(line.p1, line.p2, robit.c, robit.d).x != -1)
+        {
+                return 1;
+        }
+        if (pIntersect(line.p1, line.p2, robit.d, robit.a).x != -1)
+        {
+                return 1;
+        }
+        return 0;
+}
+//function that takes a robot struct and deteremines if a robot fits at a particular coordinate
+//returns an int: 1 if the robot fits, 0 if it does not fit
+int checkFit(vector<vector<lineSegment2D> > polySegs, robot robit)
+{
+        for (int i = 0; i < polySegs.size(); ++i)
+        {
+                for (int j = 0; j < polySegs[i].size(); ++j)
+                {
+                        if (robotAndLine(polySegs[i][j], robit))
+                        {
+                                return 0;
+                        }
+                }
+        }
+        return 1;
+}
+
+
+//function that computes the free space so that A* has precomputed free space to referece
+void findFreeSpace(vector<vector<lineSegment2D> > polySegs, int X, int Y)
+{
+	vector <robot> allAngles;
+	vector < vector <robot> > allY;
+	robot nullRobot;
+	nullRobot.a.x = -1;
+        nullRobot.score = INT_MAX;
+        robot testRobot;
+        testRobot.distX = X;
+        testRobot.distY = Y;
+        for (int i = 0; i <= 500; i+=5)
+        {
+                for (int j = 0; j <= 500; j+=5)
+                {
+                        for (int angle = 0; angle < 360; angle+= 10)
+                        {
+				cout << i << ", " << j << ", " << angle << endl;
+                                testRobot.a.x = i;
+                                testRobot.a.y = j;
+                                testRobot.theta = angle;
+                                updatePoints(&testRobot);
+                                if (checkFit(polySegs, testRobot))
+                                {
+                                        nullRobot.fits = 1;
+					freeSpaceValue += 1;
+                                }
+                                else
+                                {
+                                        nullRobot.fits = 0;
+                                }
+				allAngles.push_back(nullRobot);
+				cout << "Compelted" << endl;
+                        }
+			allY.push_back(allAngles);
+			allAngles.clear();
+                }
+		robots.push_back(allY);
+		allY.clear();
+        }
+	
+}
+
+
+//function that checks if a robot can move from one location to another
+//
+//Assumes that if the line from each point of the robot from one position 
+//to the other does not intersect an obstacles, there is a path
+//
+//This approach will sometimes determine that there is not a path when there is,
+//but it will never return true is there is not path, which works great for RRT
+int okPath (vector <vector <lineSegment2D> > polysegs, robot robot1, robot robot2)
+{
+	for (int i = 0; i < polysegs.size(); i++)
+	{
+		for (int j = 0; j < polysegs[i].size(); j++)
+		{
+			if (pIntersect(robot1.a, robot2.a, polysegs[i][j].p1, polysegs[i][j].p2).x != -1)
+			{
+				cout << "BAD1" << endl;
+				return 0;
+			}
+			else if (pIntersect(robot1.b, robot2.b, polysegs[i][j].p1, polysegs[i][j].p2).x != -1)
+                	{
+				cout << "BAD2" << endl;
+                	        return 0;
+                	}
+			else if (pIntersect(robot1.c, robot2.c, polysegs[i][j].p1, polysegs[i][j].p2).x != -1)
+                	{
+				point2D point = robot1.c;
+				point = robot2.c;
+				point = polysegs[i][j].p1;
+				point = polysegs[i][j].p2;
+                	        return 0;
+                	}
+			else if (pIntersect(robot1.d, robot2.d, polysegs[i][j].p1, polysegs[i][j].p2).x != -1)
+                	{
+				cout << "BAD4" << endl;
+                	        return 0;
+                	}
+
+		}
+	}
+	return 1;
+
+}
+
+
+//function to create a robot with random characteristics for RRT
+robot createRandoRobo() 
+{
+	robot newRobot;
+	newRobot.a.x = (int)(rand() % 501);
+	newRobot.a.y = (int)(rand() % 501);
+	newRobot.theta = (int)(rand() % 361);
+	cout << newRobot.a.x << ", " << newRobot.a.y << "THETA   " << newRobot.theta << endl;
+	updatePoints(&newRobot);
+	cout << newRobot.c.x << ", " << newRobot.c.y << "C   " << newRobot.theta << endl;
+	return newRobot;
+
+
+}
+
+
+//function to reconstruct path found by RRT for visualization 
+void createRRTPATH()
+{
+	robot tempRobot = tempEndRobot;
+	while (!checkTwoPoints(tempRobot.a, robit.a))
+        {
+		cout << "Look at me" << endl;
+                glColor3fv(green);
+		glLineWidth(3);
+                glBegin(GL_LINES);
+		path.push_back(tempRobot);
+                glVertex2f(tempRobot.a.x, tempRobot.a.y);
+		tempRobot = rrtrobots[tempRobot.prevIndex];
+                glVertex2f(tempRobot.a.x, tempRobot.a.y);
+                glEnd();
+        }
+}
+
+//RRT implementation
+//Is NOT optimized to keep looking for paths after the innitial optimal path is found
+void rrt()
+{
+   randRobo.a.x = (int)(rand() % 501);
+   randRobo.a.y = (int)(rand() % 501);
+   randRobo.theta = (int)(rand() % 361);
+   cout << randRobo.a.x << ", " << randRobo.a.y << "THETA   " << randRobo.theta << endl;
+   updatePoints(&randRobo);
+   cout << randRobo.c.x << ", " << randRobo.c.y << "C   " << randRobo.theta << endl;
+   cout << "C " << randRobo.c.x << endl;
+   int closestDist = INT_MAX;
+   int closestDistIndex = 0;
+   int connectable = 0;
+   for (int i = 0; i < rrtrobots.size(); i++)
+   {
+	cout << "ASDFASDF" << endl;
+	if (okPath(polysegs, rrtrobots[i], randRobo))
+	{
+		cout << "CONNECTED" << endl;
+		connectable = 1;
+		if (closestDist > dist(rrtrobots[i].a, randRobo.a))
+		{
+			cout << "asdf" << endl;
+			closestDist = dist(rrtrobots[i].a, randRobo.a);
+			closestDistIndex = i;
+		}
+	}
+   }
+   if (connectable)
+   {
+	randRobo.prevIndex = closestDistIndex;
+	rrtrobots.push_back(randRobo);
+	cout << "f " << finish.x << endl;
+	cout << "fy" << finish.y << endl;
+	tempEndRobot.a.x = finish.x;
+	tempEndRobot.a.y = finish.y;
+	tempEndRobot.theta = randRobo.theta;
+	tempEndRobot.distX = robit.distX;
+	tempEndRobot.distY = robit.distY;
+	updatePoints(&tempEndRobot);
+	cout << tempEndRobot.a.x << ", " << tempEndRobot.a.y << "TEMPC" << endl;
+        cout << tempEndRobot.b.x << ", " << tempEndRobot.b.y << "TEMPC" << endl;
+        cout << tempEndRobot.c.x << ", " << tempEndRobot.c.y << "TEMPC" << endl;
+        cout << tempEndRobot.d.x << ", " << tempEndRobot.d.y << "TEMPC" << endl;
+
+        if (okPath(polysegs, tempEndRobot, randRobo))
+	{
+		cout << "ALLL DONNENEE" << endl;
+		rrtDone = 1;
+		tempEndRobot.prevIndex = rrtrobots.size() - 1;
+ 		rrtrobots.push_back(tempEndRobot);
+ 	}
+   }
+
+}
+
+
+//A* implementation, is optimized to keep looking for better paths after the innitial path
+//is found 
+void findPath(int x, int y, int theta)
+{
+	robot roboto = robots[x][y][theta];
+        if (completed)
+        {
+                return;
+        }
+        if (checkTwoPoints(robit.a, roboto.a))
+        {
+                make_heap(heap.begin(), heap.end());
+                heap.push_back(roboto);
+                push_heap(heap.begin(), heap.end());
+                pop_heap (heap.begin(),heap.end());
+                heap.pop_back();
+        }
+        if (checkTwoPoints(roboto.a, finish))
+        {
+                cout << "Found It" << endl;
+		heap.clear();
+		completed = 1;
+                endRobot = roboto;
+        }
+        robot addRobot;
+        addRobot.distX = robit.distX;
+        addRobot.distY = robit.distY;
+        for (int i = -5; i <= 5; i += 5)
+        {
+                for (int j = -5; j <= 5; j+= 5) //change to defined constants
+                {
+                        addRobot.a.x = roboto.a.x + i;
+                        addRobot.a.y = roboto.a.y + j;
+                        addRobot.cost = roboto.cost + dist(addRobot.a, roboto.a);
+                        addRobot.score = addRobot.cost + dist(addRobot.a, finish);
+                        if (robots[x + i/5][y  + j/5][theta].score > addRobot.score &&
+			robots[x + i/5][y + j/5][theta].fits == 1
+                        && !(i == 0 && j == 0))
+                        {
+                                addRobot.theta = roboto.theta;
+                                addRobot.prevX = x;
+				addRobot.prevY = y;
+				addRobot.prevAngle = theta;
+				updatePoints(&addRobot);
+                                heap.push_back(addRobot);
+                                push_heap (heap.begin(),heap.end());
+                        }
+			
+                }
+        }
+	addRobot.a.x = roboto.a.x;
+        addRobot.a.y = roboto.a.y;
+	for (int i = -DELTATHETA; i <= DELTATHETA; i += DELTATHETA * 2)
+	{
+		addRobot.theta = roboto.theta + i;
+		if (addRobot.theta >= 360)
+		{
+			addRobot.theta -= 360;
+		}
+		if (addRobot.theta < 0)
+                {
+                        addRobot.theta += 360;
+                }
+		addRobot.cost = roboto.cost + 4;
+		addRobot.score = addRobot.cost + dist(addRobot.a, finish);
+		if (robots[x][y][addRobot.theta/10].score > addRobot.score &&
+        	    robots[roboto.a.x/5][roboto.a.y/5][addRobot.theta/10].fits == 1
+        	    && addRobot.score < bestDist)
+		{
+			addRobot.prevX = roboto.a.x / 5;
+        	        addRobot.prevY = roboto.a.y / 5;
+        	        addRobot.prevAngle = roboto.theta / 10;
+			updatePoints(&addRobot);
+        	        heap.push_back(addRobot);
+        	        push_heap (heap.begin(),heap.end());
+		}
+	}
+	while (heap.size() > 0)
+        {
+                sort_heap(heap.begin(), heap.end());
+                pop_heap (heap.begin(),heap.end());
+                addRobot = heap.back();
+                //cout << heap.back().a.x << ", " << heap.back().a.y << endl;
+                heap.pop_back();
+                if (robots[addRobot.a.x/5][addRobot.a.y/5][addRobot.theta/10].score > addRobot.score)
+                {
+			robots[addRobot.a.x/5][addRobot.a.y/5][addRobot.theta/10] = addRobot;
+                        findPath(addRobot.a.x/5, addRobot.a.y/5, addRobot.theta/10);
+                }
+
+        }
+	if (!completed) {completed = 1; cout << "NO PATH" << endl;}
+        return;
+}
+
+
+//function that assembles a path created so that it can be visualized in glut 
+void createPath(int x, int y, int theta)
+{
+	cout << "AsdfA" << endl;
+        if (!checkTwoPoints(robots[x][y][theta].a, robit.a))
+        {      
+                path.push_back(robots[x][y][theta]);
+                createPath(robots[x][y][theta].prevX, robots[x][y][theta].prevY, robots[x][y][theta].prevAngle);
+        }
+}
+
+void display(void) {
+
+  glClear(GL_COLOR_BUFFER_BIT);
+  glMatrixMode(GL_MODELVIEW); 
+  glLoadIdentity(); //clear the matrix
+
+
+  /* The default GL window is [-1,1]x[-1,1] with the origin in the
+     center. 
+     
+     Our system of coordinates (in which we generate our points) is
+     (0,0) to (WINSIZE,WINSIZE), with the origin in the lower left
+     corner.
+
+     We need to map the points to [-1,1] x [-1,1]  
+
+     Assume we are the local coordinate system. 
+
+     First we scale down to [0,2] x [0,2] */ 
+  glScalef(2.0/WINDOWSIZE, 2.0/WINDOWSIZE, 1.0);  
+  /* Then we translate so the local origin goes in the middle of teh
+     window to (-WINDOWSIZE/2, -WINDOWSIZE/2) */
+  glTranslatef(-WINDOWSIZE/2, -WINDOWSIZE/2, 0); 
+  
+  //now we draw in our local coordinate system (0,0) to
+  //(WINSIZE,WINSIZE), with the origin in the lower left corner.
+  if (polygons.size() > 0)
+  {
+	for (int i = 0; i < polygons.size(); i++)
+	{
+		if (polygons[i].size() > 0)
+		{
+  			draw_polygon(polygons[i]); 
+		}
+	}
+  }
+  //draw a circle where the mouse was last clicked. Note that this
+  //point is stored as a global variable and is modified by the mouse handler function 
+  if (poly_init_mode != 2)
+  {
+	draw_circle(mouse_x, mouse_y); 
+  } 
+  cout << "Check .5" << endl;
+  if (drawPath)
+  {
+	draw_path();
+  }
+  if (drawAstar)
+  {
+	drawPathRobot();
+  }
+  if (rrtDraw)
+  {
+	drawRRRT();
+  }
+  draw_robot();
+  cout << "Check 1" << endl;
+  draw_end(finish.x, finish.y);
+  cout << "Survives Display" << endl;
+  glFlush();
+}
+
+
+
+//function to keep track of keypresses using a switch for each case
+/* ****************************** */
+void keypress(unsigned char key, int x, int y) {
+  switch(key) {
+  case 'q':
+    exit(0);
+    break;
+
+    //expected behaviour: press 's', then click on the points you
+    //want, and press 'e' when you're done. the points will be saved
+    //in global 'poly'
+    
+  case 'z': 
+    //start re-initializeing polygon 
+    polygons.clear();
+    polygon.clear();
+    currPoly = 0;
+    polygons.push_back(polygon);
+    poly_init_mode = 1; 
+    glutPostRedisplay();
+    break;
+  case 'b':
+    //place robot and then finish point in window
+    poly_init_mode = 2;
+    glutPostRedisplay();
+    break;
+  case 'c':
+    //innitate drawing a new obstacle
+    polygons.push_back(polygon);
+    polygon.clear();
+    poly_init_mode = 1;
+    currPoly += 1;
+    glutPostRedisplay();
+    break;
+  case 'e':
+    //rotate the robot (just for fun)
+    robit.theta += 10;
+    updatePoints(&robit);
+    cout << robit.b.x << ", " << robit.b.y << endl;
+    glutPostRedisplay();
+    break;
+  /* W S A D move thr robot around (just for fun) */
+  case 'a':
+    robit.a.x -= 5;
+    updatePoints(&robit);
+    glutPostRedisplay();
+    break;
+  case 's':
+    robit.a.y -= 5;
+    updatePoints(&robit);
+    glutPostRedisplay();
+    break;
+  case 'w':
+    robit.a.y += 5;
+    updatePoints(&robit);
+    glutPostRedisplay();
+    break;
+  case 'd':
+    robit.a.x += 5;
+    updatePoints(&robit);
+    glutPostRedisplay();
+    break;
+  case 'v':
+    //computre the free space for A*
+    moveToGrid();
+    addBorder();
+    polygons.push_back(polygon);
+    polysegs = pointsToSeg(polygons);
+    cout << "HERe" << endl;
+    findFreeSpace(polysegs, robit.distX, robit.distY);
+    cout << "Free Space " << freeSpaceValue << endl;
+    cout << "P Free   " << percentFree << endl;
+    cout << "DELTATHTETATATATEATA  "  << DELTATHETA << endl;
+    glutPostRedisplay();
+    break;
+  case 'i': //compute A*
+    robit.score = dist(robit.a, finish);
+    robit.cost = 0;
+    robots[robit.a.x/5][robit.a.y/5][robit.theta/10] = robit;
+    findPath(robit.a.x/5, robit.a.y/5, robit.theta/10);
+    glutPostRedisplay();
+    break;
+  case 'u': //draw path from A*
+    createPath (endRobot.a.x/5, endRobot.a.y/5, endRobot.theta/10);
+    cout << path.size() << "PATH" << endl;
+    drawPath = 1;
+    currRobot = path.size();
+    glutPostRedisplay();
+    break;
+  case 'o':  //animate robot
+    currRobot -= 1;
+    drawAstar = 1;
+    glutPostRedisplay();
+    break;
+  case 'r': //fun RRT
+    updatePoints(&robit);
+    addBorder();
+    polygons.push_back(polygon);
+    polysegs = pointsToSeg(polygons);
+    robit.prevIndex = 0;
+    rrtrobots.push_back(robit);
+    while (!rrtDone)
+    {
+	rrt();
+    }
+    rrtDraw = 1;
+    glutPostRedisplay();
+    break;
+  }
+}
+
+/*whenever the window is re-sized with its new width and height */
+void reshape(GLsizei width, GLsizei height) {  // GLsizei for non-negative integer
+     
+   // Set the viewport to cover the new window
+   glViewport(0, 0, width, height);
+ 
+   glMatrixMode(GL_PROJECTION);  // To operate on the Projection matrix
+   glLoadIdentity();             // Reset
+   gluOrtho2D(0.0, (GLdouble) width, 0.0, (GLdouble) height); 
+}
+
+
+
+
+
+
+
+
+

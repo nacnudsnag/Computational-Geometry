@@ -1,0 +1,611 @@
+#include "geom.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <math.h>
+#include <assert.h>
+#include <iostream>
+#include <algorithm>
+#include <map>
+#include <queue>
+#ifdef __APPLE__
+#include <GLUT/glut.h>
+#else
+#include <GL/glut.h>
+#endif
+#include <vector>
+
+using namespace std;
+
+//colors for glut
+GLfloat red[3] = {1.0, 0.0, 0.0};
+GLfloat green[3] = {0.0, 1.0, 0.0};
+GLfloat blue[3] = {0.0, 0.0, 1.0};
+GLfloat black[3] = {0.0, 0.0, 0.0};
+GLfloat white[3] = {1.0, 1.0, 1.0};
+GLfloat gray[3] = {0.5, 0.5, 0.5};
+GLfloat yellow[3] = {1.0, 1.0, 0.0};
+GLfloat magenta[3] = {1.0, 0.0, 1.0};
+GLfloat cyan[3] = {0.0, 1.0, 1.0};
+
+GLint fillmode = 0;
+
+int der = 0;
+int currPoly = 0;
+int n;
+//the current polygons
+vector <vector <point2D> > polygons;
+vector <vector <lineSegment2D> > polysegs;
+vector <point2D> polygon;
+vector <robot> roboPath;
+robot pathRobot;
+int currRobot = 0;
+vector<vector<vector<int> > > freeSpace;
+int drawPath = 0;
+
+robot robit;
+//end point
+point2D finish = {-10, -10};
+//coordinates of last mouse click
+//initialized to a point outside the window
+
+
+//function declarations
+void display(void);
+void keypress(unsigned char key, int x, int y);
+void timerfunc(); 
+void mousepress(int button, int state, int x, int y);
+vector <vector <lineSegment2D> > pointsToSeg(vector <vector<point2D> > polygons);
+
+
+
+const int WINDOWSIZE = 500; 
+double mouse_x=-10, mouse_y=-10; 
+double poly_init_mode = 0; 
+
+
+
+void draw_circle(double x, double y){
+  glColor3fv(blue);   
+  int precision = 100;
+  double r = 4; 
+  double theta = 0;
+  glBegin(GL_POLYGON);
+  for(int i = 0; i < precision; i++){
+    theta = i * 2 * M_PI/precision;
+    glVertex2f(x + r*cos(theta), y + r*sin(theta));
+  }
+  glEnd();
+}
+
+
+void draw_robot(){
+  glColor3fv(green);
+  glBegin(GL_POLYGON);
+  glVertex2f(robit.a.x , robit.a.y);
+  glVertex2f(robit.b.x , robit.b.y);
+  glVertex2f(robit.c.x , robit.c.y);
+  glVertex2f(robit.d.x , robit.d.y);
+  glEnd();
+}
+
+
+void draw_end(double x, double y){
+  glColor3fv(red);
+  int precision = 100;
+  double r = 4;
+  double theta = 0;
+  glBegin(GL_POLYGON);
+  for(int i = 0; i < precision; i++){
+    theta = i * 2 * M_PI/precision;
+    glVertex2f(x + r*cos(theta), y + r*sin(theta));
+  }
+  glEnd();
+}
+
+//function to convert a polygon of points to a polygon of line segments
+
+vector < vector <lineSegment2D> > pointsToSeg(vector < vector < point2D > > polygons)
+{
+        vector < vector < lineSegment2D > > toReturn;
+        for (int i = 0; i < polygons.size(); ++i)
+        {
+                vector < lineSegment2D > polySeg;
+                lineSegment2D toAdd;
+                toAdd.p1 = polygons[i][polygons[i].size()-1];
+                toAdd.p2 = polygons[i][0];
+                polySeg.push_back(toAdd);
+                for( int h = 1; h < polygons[i].size(); ++h)
+                {
+                        toAdd.p1 = polygons[i][h - 1];
+                        toAdd.p2 = polygons[i][h];
+                        polySeg.push_back(toAdd);
+                }
+                toReturn.push_back(polySeg);
+        }
+        return toReturn;
+}
+
+
+void mousepress(int button, int state, int x, int y) {
+
+  if(state == GLUT_DOWN) {
+
+    mouse_x = x;
+    mouse_y = y;
+    //(x,y) are in wndow coordinates, where the origin is in the upper
+    //left corner; our reference system has the origin in lower left
+    //corner, this means we have to reflect y
+    mouse_y = WINDOWSIZE - mouse_y; 
+    
+    printf("mouse click at (x=%d, y=%d)\n", (int)mouse_x, (int)mouse_y);
+    if (poly_init_mode == 1) {
+      cout << "In Poly init mode" << endl;
+      point2D p = {mouse_x, mouse_y}; 
+      polygons[currPoly].push_back(p);
+    }
+    if (poly_init_mode == 2) 
+    {
+	robit.a.x = mouse_x;
+	robit.a.y = mouse_y; 
+	poly_init_mode = 2.5;
+	robit.b.x = mouse_x;
+        robit.b.y = mouse_y;
+	robit.c.x = mouse_x;
+        robit.c.y = mouse_y;
+	robit.d.x = mouse_x;
+        robit.d.y = mouse_y;
+    }
+    else if (poly_init_mode == 2.5) 
+    {
+	
+	robit.c.x = mouse_x;
+	robit.c.y = mouse_y; 
+	robit.b.x = robit.c.x;
+	robit.b.y = robit.a.y;
+	robit.d.x = robit.a.x;
+	robit.d.y = robit.c.y;
+	robit.theta = 0;
+	robit.distX = robit.c.x - robit.a.x;
+	robit.distY = robit.c.y - robit.a.y;
+	poly_init_mode = 3;
+	
+    }
+    else if (poly_init_mode == 3)
+    {
+	finish.x = mouse_x;
+	finish.y = mouse_y;
+	poly_init_mode = 0;
+    }  
+    glutPostRedisplay();
+  }
+
+}
+
+
+int main(int argc, char** argv){
+  /* initialize GLUT  */
+  glutInit(&argc, argv);
+  glutInitDisplayMode(GLUT_SINGLE | GLUT_RGB);
+  glutInitWindowSize(WINDOWSIZE, WINDOWSIZE);
+  glutInitWindowPosition(100,100);
+  glutCreateWindow(argv[0]);
+  /* register callback functions */
+  glutDisplayFunc(display); 
+
+  glutMouseFunc(mousepress); 
+  glutKeyboardFunc(keypress);
+
+  /* init GL */
+  /* set background color black*/
+  glClearColor(0, 0, 0, 0);   
+  /* here we can enable depth testing and double buffering and so
+     on */
+
+  
+  /* give control to event handler */
+  glutMainLoop();
+  return 0;
+
+}
+void drawFreeSpace()
+{
+	for (int i = 0; i <= 500; i+=5)
+        {
+                for (int j = 0; j <= 500; j+=5)
+                {
+                        for (int angle = 0; angle < 360; angle+= 10)
+                        {
+				if (freeSpace[i][j][angle/10] == 1)
+				{
+					glColor3fv(cyan);
+					glLineWidth(2);
+
+					glBegin(GL_POLYGON);
+					glVertex2f(i-1, j - 1);
+					glVertex2f(i + 1, j - 1);
+					glVertex2f(i + 1, j + 1);
+					glVertex2f(i -1, j + 1);
+					glEnd();
+					
+				}
+			}
+		}
+	}
+}
+
+void draw_path()
+{
+	for (int i = roboPath.size() - 1; i > 0; i--)
+	{
+		glColor3fv(cyan);
+		glBegin(GL_LINES);	
+		glVertex2f(roboPath[i].a.x, roboPath[i].a.y);
+		glVertex2f(roboPath[i - 1].a.x, roboPath[i - 1].a.y);
+		glEnd();
+		i -= 1;
+	}
+}
+void draw_segments(vector <lineSegment2D> segs)
+{
+	glColor3fv(red);
+	glLineWidth(2.5);
+	for (int i = 0;i < segs.size(); i++)
+	{
+		glBegin(GL_LINES);
+		glVertex2f(segs[i].p1.x, segs[i].p1.y);
+		glVertex2f(segs[i].p2.x, segs[i].p2.y);
+		glEnd();
+	}
+}
+void drawPathRobot()
+{
+  glColor3fv(magenta);
+  glBegin(GL_POLYGON);
+  glVertex2f(roboPath[currRobot].a.x , roboPath[currRobot].a.y);
+  glVertex2f(roboPath[currRobot].b.x , roboPath[currRobot].b.y);
+  glVertex2f(roboPath[currRobot].c.x , roboPath[currRobot].c.y);
+  glVertex2f(roboPath[currRobot].d.x , roboPath[currRobot].d.y);
+  glEnd();  
+}
+void draw_polygon(vector<point2D> poly){
+  
+  if (poly.size() == 0) return; 
+
+  //set color 
+  glColor3fv(yellow);   
+  glLineWidth(2);
+  int i;
+  for (i=0; i<poly.size()-1; i++) {
+    glBegin(GL_LINES);
+    
+    glVertex2f(poly[i].x, poly[i].y); 
+    glVertex2f(poly[i+1].x, poly[i+1].y);
+    glEnd();
+  }
+  //render last segment between last point and forst point 
+  int last=poly.size()-1; 
+    glBegin(GL_LINES);
+    glVertex2f(poly[last].x, poly[last].y); 
+    glVertex2f(poly[0].x, poly[0].y);
+    glEnd();
+}
+
+
+void addBorder() {
+    polygon.clear();
+    point2D a, b, c, d;
+    a.x = 0;
+    a.y = 0;
+    polygon.push_back(a);
+    b.x = 500;
+    b.y = 0;
+    polygon.push_back(b);
+    c.x = 500;
+    c.y = 500;
+    polygon.push_back(c);
+    d.x = 0;
+    d.y = 500;
+    polygon.push_back(d);
+    polygons.push_back(polygon);
+} 
+void moveToGrid()
+{
+	while (fmod(robit.a.x,5) != 0)
+	{
+		robit.a.x += 1;
+	}
+	while (fmod(robit.a.y,5) != 0)
+        {
+                robit.a.y += 1;
+        }
+	updatePoints(&robit);
+	while (fmod(finish.x,5) != 0)
+        {
+                finish.x += 1;
+        }
+        while (fmod(finish.y,5) != 0)
+        {
+                finish.y += 1;
+        }
+
+}
+
+
+void findPath(robot start, robot current, point2D end)
+{
+        if (completed)
+        {
+                return;
+        }
+        bestScore[current.a.x][current.a.y][current.theta] = current.score;
+        if (firstRound)
+        {
+                initalizeScores();
+                firstRound = 0;
+        }
+        if (checkTwoPoints(start.a, current.a))
+        {
+                make_heap(heap.begin(), heap.end());
+                heap.push_back(current);
+                push_heap(heap.begin(), heap.end());
+                pop_heap (heap.begin(),heap.end());
+                heap.pop_back();
+        }
+        if (checkTwoPoints(current.a, end))
+        {
+                cout << "Found It" << endl;
+                bestDist = current.score;
+                endRobot = current;
+        }
+        robot addRobot;
+        addRobot.distX = start.distX;
+        addRobot.distY = start.distY;
+        //cout << "cx: " << current.a.x << "y: " << current.a.y << endl;
+
+        for (int i = -5; i <= 5; i += 5)
+        {
+                for (int j = -5; j <= 5; j+= 5) //change to defined constants
+                {
+                        addRobot.a.x = current.a.x + i;
+                        addRobot.a.y = current.a.y + j;
+                        addRobot.cost = current.cost + dist(addRobot.a, current.a);
+                        addRobot.score = addRobot.cost + dist(addRobot.a, end);
+                        if (bestScore[current.a.x + i][current.a.y + j][current.theta] > addRobot.score &&
+                        willItFit[current.a.x + i][current.a.y + j][current.theta] == 1
+                        && !(i == 0 && j == 0) && addRobot.score < bestDist)
+                        {
+                                addRobot.theta = current.theta;
+                                addRobot.prev = &current;
+                                updatePoints(&addRobot);
+                                heap.push_back(addRobot);
+                                push_heap (heap.begin(),heap.end());
+                        }
+                }
+        }
+	while (heap.size() > 0)
+        {
+                sort_heap(heap.begin(), heap.end());
+                //cout << "Size in Loop: " << heap.size() << endl;
+                pop_heap (heap.begin(),heap.end());
+                addRobot = heap.back();
+                //cout << heap.back().a.x << ", " << heap.back().a.y << endl;
+                heap.pop_back();
+                if (bestScore[addRobot.a.x][addRobot.a.y][addRobot.theta] > addRobot.score)
+                {
+                        //cout << "Doing it!" << endl;
+                        findPath(start, addRobot, end);
+                }
+
+        }
+        if (heap.size() == 0)
+        {
+                if (bestDist > INT_MAX - 1)
+                {
+                        completed = 1;
+                        cout << "No Path" << endl;
+                }
+                if (!completed && checkTwoPoints(current.a, start.a))
+                {
+                        path.clear();
+                        createPath(&endRobot, &start);
+                        completed = 1;
+                }
+        }
+        return;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+void display(void) {
+
+  glClear(GL_COLOR_BUFFER_BIT);
+  glMatrixMode(GL_MODELVIEW); 
+  glLoadIdentity(); //clear the matrix
+
+
+  /* The default GL window is [-1,1]x[-1,1] with the origin in the
+     center. 
+     
+     Our system of coordinates (in which we generate our points) is
+     (0,0) to (WINSIZE,WINSIZE), with the origin in the lower left
+     corner.
+
+     We need to map the points to [-1,1] x [-1,1]  
+
+     Assume we are the local coordinate system. 
+
+     First we scale down to [0,2] x [0,2] */ 
+  glScalef(2.0/WINDOWSIZE, 2.0/WINDOWSIZE, 1.0);  
+  /* Then we translate so the local origin goes in the middle of teh
+     window to (-WINDOWSIZE/2, -WINDOWSIZE/2) */
+  glTranslatef(-WINDOWSIZE/2, -WINDOWSIZE/2, 0); 
+  
+  //now we draw in our local coordinate system (0,0) to
+  //(WINSIZE,WINSIZE), with the origin in the lower left corner.
+  if (polygons.size() > 0)
+  {
+	for (int i = 0; i < polygons.size(); i++)
+	{
+		if (polygons[i].size() > 0)
+		{
+  			draw_polygon(polygons[i]); 
+		}
+	}
+  }
+  //draw a circle where the mouse was last clicked. Note that this
+  //point is stored as a global variable and is modified by the mouse handler function 
+  if (poly_init_mode != 2)
+  {
+	draw_circle(mouse_x, mouse_y); 
+  } 
+  cout << "Check .5" << endl;
+  if (drawPath)
+  {
+	draw_path();
+  }
+  if (der)
+  {
+	drawPathRobot();
+  }
+  draw_robot();
+  cout << "Check 1" << endl;
+  draw_end(finish.x, finish.y);
+  cout << "Survives Display" << endl;
+  glFlush();
+}
+
+
+
+//function to keep track of keypresses using a switch for each case
+/* ****************************** */
+void keypress(unsigned char key, int x, int y) {
+  switch(key) {
+  case 'q':
+    exit(0);
+    break;
+
+    //expected behaviour: press 's', then click on the points you
+    //want, and press 'e' when you're done. the points will be saved
+    //in global 'poly'
+    
+  case 'z': 
+    //start re-initializeing polygon 
+    polygons.clear();
+    polygon.clear();
+    currPoly = 0;
+    n = 0;
+    polygons.push_back(polygon);
+    poly_init_mode = 1; 
+    glutPostRedisplay();
+    break;
+  case 'b':
+    //place guard into polygon
+    poly_init_mode = 2;
+    glutPostRedisplay();
+    break;
+  case 'c':
+    polygons.push_back(polygon);
+    polygon.clear();
+    poly_init_mode = 1;
+    currPoly += 1;
+    glutPostRedisplay();
+    break;
+  case 'r':
+    robit.theta += 10;
+    updatePoints(&robit);
+    cout << robit.b.x << ", " << robit.b.y << endl;
+    glutPostRedisplay();
+    break;
+  case 'a':
+    robit.a.x -= 5;
+    updatePoints(&robit);
+    glutPostRedisplay();
+    break;
+  case 's':
+    robit.a.y -= 5;
+    updatePoints(&robit);
+    glutPostRedisplay();
+    break;
+  case 'w':
+    robit.a.y += 5;
+    updatePoints(&robit);
+    glutPostRedisplay();
+    break;
+  case 'd':
+    robit.a.x += 5;
+    updatePoints(&robit);
+    glutPostRedisplay();
+    break;
+  case 'v':
+    robit.score = dist(robit.a, finish);
+    robit.cost = 0;
+    addBorder();
+    polygons.push_back(polygon);
+    polysegs = pointsToSeg(polygons);
+    freeSpace = findFreeSpace(polysegs, robit.distX, robit.distY);
+    glutPostRedisplay();
+    break;
+  case 'i':
+    moveToGrid();
+    findPath(robit, robit, finish);
+    glutPostRedisplay();
+    break;
+  case 'u':
+    cout << "Done with path" << endl;
+    roboPath= returnPath();
+    cout << "All good?" << endl;
+    glutPostRedisplay();
+    break;
+  case 'p':
+    drawPath = 1;
+    currRobot = roboPath.size();
+    der = 1;
+    glutPostRedisplay();
+    break;
+  case 'o':
+    if (currRobot > -1)
+    {
+    	currRobot -= 1;
+    }
+    glutPostRedisplay();
+    break;
+  }
+}
+
+/*whenever the window is re-sized with its new width and height */
+void reshape(GLsizei width, GLsizei height) {  // GLsizei for non-negative integer
+     
+   // Set the viewport to cover the new window
+   glViewport(0, 0, width, height);
+ 
+   glMatrixMode(GL_PROJECTION);  // To operate on the Projection matrix
+   glLoadIdentity();             // Reset
+   gluOrtho2D(0.0, (GLdouble) width, 0.0, (GLdouble) height); 
+}
+
+
+
+
+
+
+
+
+
+
